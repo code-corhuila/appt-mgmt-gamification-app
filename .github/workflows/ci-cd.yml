@@ -26,24 +26,21 @@ jobs:
   pruebas:
     name: 1 · Pruebas
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+          node-version: 20
 
       - name: Install Dependencies
-        run: npm ci
+        working-directory: backend
+        run: npm install
 
-      - name: Run Tests (25 Tests / 7 Suites)
+      - name: Run Tests (26 Tests / 7 Suites)
+        working-directory: backend
         run: npm test
 
   imagenes:

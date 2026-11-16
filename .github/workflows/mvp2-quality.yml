@@ -20,12 +20,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
-      - name: Install locked backend dependencies
+          node-version: 20
+      - name: Install backend dependencies
         working-directory: backend
-        run: npm ci
+        run: npm install
       - name: Run unit, contract, gateway, and service tests
         working-directory: backend
         run: npm test
