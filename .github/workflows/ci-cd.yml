@@ -1,11 +1,5 @@
 # Pipeline CI/CD de Salud Activa (Corte 3 - CORHUILA)
 # Soporta tanto Monorepo como Repositorio Frontend/Móvil Android (appt-mgmt-gamification-app)
-#
-# Estaciones:
-#   1. Pruebas (Android Gradle / Node Backend)
-#   2. Imágenes + Seguridad (Trivy / Mobile Artifacts)
-#   3. Desplegar en EC2 (si aplica)
-#   4. Verificar en producción
 
 name: CI-CD
 
@@ -21,6 +15,7 @@ permissions:
 
 env:
   REGISTRO: ghcr.io
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx2048m"
 
 jobs:
   pruebas:
@@ -35,12 +30,11 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-          cache: 'gradle'
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew || true
