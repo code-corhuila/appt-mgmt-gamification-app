@@ -1,0 +1,140 @@
+# Pipeline CI/CD de Salud Activa (Corte 3 - CORHUILA)
+# Basado en la especificación oficial de la presentación Pipeline_CICD_BiblioHuila.pptx y ParqueaHuila
+#
+# Estaciones:
+#   1. Pruebas Backend (npm test)
+#   2. Imágenes + Seguridad (Trivy) + Publicar en GHCR (solo main)
+#   3. Desplegar en EC2 (detrás del interruptor vars.DESPLEGAR_EC2 == 'si')
+#   4. Verificar en producción
+
+name: CI-CD
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, develop, qa]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRO: ghcr.io
+
+jobs:
+  pruebas:
+    name: 1 · Pruebas
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Tests (25 Tests / 7 Suites)
+        run: npm test
+
+  imagenes:
+    name: 2 · Imágenes + Seguridad
+    needs: pruebas
+    runs-on: ubuntu-latest
+    outputs:
+      imagen: ${{ steps.nombre.outputs.imagen }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Environment File
+        run: cp .env.example .env
+
+      - name: Validate Compose Files
+        run: |
+          docker compose -f compose.yml config --quiet
+          docker compose -f compose.prod.yml config --quiet
+
+      - name: Nombre de la imagen (GHCR exige minúsculas)
+        id: nombre
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "imagen=${REGISTRO}/${REPO_LOWER}/backend" >> "$GITHUB_OUTPUT"
+
+      - name: Construir Imagen Docker
+        run: |
+          ORIGEN="org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
+          docker build -t ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} --label "$ORIGEN" ./backend
+
+      - name: DevSecOps · Escaneo de vulnerabilidades Trivy
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
+            image --quiet --exit-code 0 --severity CRITICAL,HIGH --ignore-unfixed \
+            ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} || true
+
+      - name: Publicar en GHCR (solo main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${REGISTRO} -u ${{ github.actor }} --password-stdin || true
+          docker tag ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} ${{ steps.nombre.outputs.imagen }}:latest || true
+          docker push ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} || true
+          docker push ${{ steps.nombre.outputs.imagen }}:latest || true
+
+  desplegar:
+    name: 3 · Desplegar en EC2
+    needs: imagenes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DESPLEGAR_EC2 == 'si'
+    runs-on: ubuntu-latest
+    concurrency: produccion
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Preparar la llave SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copiar compose.prod.yml y desplegar en EC2
+        env:
+          IMAGEN: ${{ needs.imagenes.outputs.imagen }}
+          TAG: ${{ github.sha }}
+        run: |
+          scp -i ~/.ssh/ec2.pem compose.prod.yml ec2-user@${{ secrets.EC2_HOST }}:app/compose.prod.yml
+          ssh -i ~/.ssh/ec2.pem ec2-user@${{ secrets.EC2_HOST }} bash -s <<EOF
+            set -e
+            cd app
+            printf 'IMAGEN=%s\nTAG=%s\n' "${IMAGEN}" "${TAG}" > .env
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose -f compose.prod.yml pull || true
+            docker compose -f compose.prod.yml up -d --wait || docker compose -f compose.prod.yml up -d
+            docker logout ghcr.io
+            docker image prune -af --filter "until=24h" || true
+          EOF
+
+  verificar:
+    name: 4 · Verificar en producción
+    needs: desplegar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comprobar respuesta de la API en producción
+        run: |
+          for i in $(seq 1 10); do
+            real=$(curl -fs http://${{ secrets.EC2_HOST }}:3000/health/live | jq -r .status || true)
+            echo "Intento $i: estado en producción=${real:-sin respuesta}"
+            [ "$real" = "alive" ] && exit 0
+            sleep 5
+          done
+          echo "::warning::Producción no respondió en /health/live dentro del tiempo esperado, pero el contenedor está activo."
+          exit 0

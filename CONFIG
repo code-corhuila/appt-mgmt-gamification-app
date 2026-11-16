@@ -1,0 +1,37 @@
+# SALUD ACTIVA - PROFILE & REPOSITORY CONFIGURATION (CORTE 3: c3-sprints)
+
+[STUDENT_PROFILE]
+STUDENT_NAME=Brayan Yara
+GITHUB_USERNAME=BrayanYara1
+STUDENT_ROLE=Full Stack Developer & DevOps Lead
+COURSE=Sistemas Distribuidos
+PERIOD=2026-2
+
+[PROJECT_CONFIG]
+PROJECT_NAME=Salud Activa (GestionTurnosApp)
+REPOSITORY_NAME=ProyectoDistribuidos2026
+PRIMARY_BRANCH=main
+DEVELOPMENT_BRANCH=develop
+QA_BRANCH=qa
+FEATURE_BRANCH=hu-status
+RELEASE_TAG=v3.0.0
+
+[CORTE_CONFIG]
+CORTE_NUMBER=3
+GRADE_TARGET=5.0
+SPRINT_GOAL=Deliver MVP 3 - Observability, Zero-Downtime Deployment, Security (STRIDE/Trivy), CI/CD and Proven Resilience (Load + Chaos)
+TOTAL_STORY_POINTS=32
+REPORT_PATH_PATTERN=NN-week/hu-status/README.md
+
+[WEEKS]
+WEEK_06=06-week/hu-status/README.md
+WEEK_07=07-week/hu-status/README.md
+WEEK_08=08-week/hu-status/README.md
+WEEK_09=09-week/hu-status/README.md
+WEEK_10=10-week/hu-status/README.md
+WEEK_11=11-week/hu-status/README.md
+WEEK_13=13-week/hu-status/README.md
+
+[EVIDENCE]
+ANEXOS_EVIDENCIA=ANEXOS_PLANOS_EVIDENCIA.md
+SOPORTES_ENTREGA=ENTREGA_MVP3_CORTE3_SUSTENTACION.md

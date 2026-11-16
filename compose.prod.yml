@@ -1,0 +1,101 @@
+# Ambiente de PRODUCCIÓN / DESPLIEGUE CONTINUO — Salud Activa
+# Uso:
+#   docker compose -f compose.prod.yml up --build -d --wait
+
+services:
+  mongodb:
+    image: mongo:7.0
+    restart: always
+    volumes:
+      - mongodb_prod_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ./backend
+    restart: always
+    command: ["node", "services/auth-service/server.js"]
+    environment:
+      AUTH_PORT: 3001
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/SaludActivaProd}
+      JWT_SECRET: ${JWT_SECRET:-production-jwt-secret-placeholder-change-in-env}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-production-service-token-placeholder-change-in-env}
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  appointments-service:
+    build:
+      context: ./backend
+    restart: always
+    command: ["node", "services/appointments-service/server.js"]
+    environment:
+      APPOINTMENTS_PORT: 3002
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/SaludActivaProd}
+      JWT_SECRET: ${JWT_SECRET:-production-jwt-secret-placeholder-change-in-env}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-production-service-token-placeholder-change-in-env}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://rabbitmq:5672}
+      DEMO_FAILURE_ENABLED: ${DEMO_FAILURE_ENABLED:-false}
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  backend:
+    build:
+      context: ./backend
+    restart: always
+    environment:
+      PORT: 3000
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/SaludActivaProd}
+      JWT_SECRET: ${JWT_SECRET:-production-jwt-secret-placeholder-change-in-env}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-production-service-token-placeholder-change-in-env}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      APPOINTMENTS_SERVICE_URL: http://appointments-service:3002
+      NODE_ENV: production
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      appointments-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  mongodb_prod_data:
