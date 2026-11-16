@@ -9,13 +9,8 @@ on:
   pull_request:
     branches: [main, develop, qa]
 
-permissions:
-  contents: read
-  packages: write
-
 env:
   REGISTRO: ghcr.io
-  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx2048m"
 
 jobs:
   pruebas:
@@ -30,11 +25,6 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
 
       - name: Grant Execute Permission for Gradle Wrapper
         run: chmod +x gradlew || true
