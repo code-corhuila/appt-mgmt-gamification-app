@@ -1,0 +1,30 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, develop, qa]
+
+jobs:
+  build:
+    name: 1 · Pruebas y Compilación Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17 (Temurin JDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Grant Execute Permission for Gradle Wrapper
+        run: chmod +x gradlew
+
+      - name: Build Android App (Debug APK)
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          ./gradlew assembleDebug --no-daemon
