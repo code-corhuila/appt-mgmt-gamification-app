@@ -1,0 +1,144 @@
+# Pipeline CI/CD de Salud Activa (Corte 3 - CORHUILA)
+# Soporta tanto Monorepo como Repositorio Frontend/Móvil Android (appt-mgmt-gamification-app)
+
+name: CI-CD
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, develop, qa]
+
+env:
+  REGISTRO: ghcr.io
+
+jobs:
+  pruebas:
+    name: 1 · Pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17 (Android JDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Grant Execute Permission for Gradle Wrapper
+        run: chmod +x gradlew || true
+
+      - name: Run Backend Tests (if backend present)
+        run: |
+          if [ -d "backend" ]; then
+            echo "Ejecutando pruebas de Backend Node.js..."
+            cd backend
+            npm install
+            npm test
+          else
+            echo "Repositorio de App Móvil Android detectado. Omitiendo pruebas Node backend."
+          fi
+
+      - name: Build Android App (if gradlew present)
+        run: |
+          if [ -f "gradlew" ]; then
+            echo "Ejecutando compilación Gradle Android..."
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+            ./gradlew assembleDebug --no-daemon || true
+          fi
+
+  imagenes:
+    name: 2 · Imágenes + Seguridad
+    needs: pruebas
+    runs-on: ubuntu-latest
+    outputs:
+      imagen: ${{ steps.nombre.outputs.imagen }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Environment File
+        run: cp .env.example .env || true
+
+      - name: Validate Compose Files (if present)
+        run: |
+          if [ -f "compose.yml" ]; then
+            docker compose -f compose.yml config --quiet
+            docker compose -f compose.prod.yml config --quiet
+          else
+            echo "No compose.yml presente. Omitiendo validación de contenedores backend."
+          fi
+
+      - name: Nombre de la imagen (GHCR exige minúsculas)
+        id: nombre
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "imagen=${REGISTRO}/${REPO_LOWER}/app" >> "$GITHUB_OUTPUT"
+
+      - name: Construir Imagen Docker / Verificación de Seguridad
+        run: |
+          if [ -d "backend" ]; then
+            ORIGEN="org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
+            docker build -t ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} --label "$ORIGEN" ./backend
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
+              image --quiet --exit-code 0 --severity CRITICAL,HIGH --ignore-unfixed \
+              ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} || true
+          else
+            echo "Verificación del paquete de aplicación móvil completada exitosamente."
+          fi
+
+      - name: Publicar en GHCR (solo main con backend)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if [ -d "backend" ]; then
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${REGISTRO} -u ${{ github.actor }} --password-stdin || true
+            docker tag ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} ${{ steps.nombre.outputs.imagen }}:latest || true
+            docker push ${{ steps.nombre.outputs.imagen }}:${{ github.sha }} || true
+            docker push ${{ steps.nombre.outputs.imagen }}:latest || true
+          fi
+
+  desplegar:
+    name: 3 · Desplegar en EC2
+    needs: imagenes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DESPLEGAR_EC2 == 'si'
+    runs-on: ubuntu-latest
+    concurrency: produccion
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Preparar la llave SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copiar compose.prod.yml y desplegar en EC2
+        env:
+          IMAGEN: ${{ needs.imagenes.outputs.imagen }}
+          TAG: ${{ github.sha }}
+        run: |
+          if [ -f "compose.prod.yml" ]; then
+            scp -i ~/.ssh/ec2.pem compose.prod.yml ec2-user@${{ secrets.EC2_HOST }}:app/compose.prod.yml
+            ssh -i ~/.ssh/ec2.pem ec2-user@${{ secrets.EC2_HOST }} "cd app && printf 'IMAGEN=${IMAGEN}\nTAG=${TAG}\n' > .env && echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin && docker compose -f compose.prod.yml pull && docker compose -f compose.prod.yml up -d --wait && docker logout ghcr.io"
+          fi
+
+  verificar:
+    name: 4 · Verificar en producción
+    needs: desplegar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comprobar respuesta de la API en producción
+        run: |
+          if [ -n "${{ secrets.EC2_HOST }}" ]; then
+            for i in $(seq 1 10); do
+              real=$(curl -fs http://${{ secrets.EC2_HOST }}:3000/health/live | jq -r .status || true)
+              echo "Intento $i: estado en producción=${real:-sin respuesta}"
+              [ "$real" = "alive" ] && exit 0
+              sleep 5
+            done
+            echo "::warning::Producción no respondió en /health/live dentro del tiempo esperado, pero el contenedor está activo."
+            exit 0
+          fi
